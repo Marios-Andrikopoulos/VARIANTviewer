@@ -1,0 +1,615 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Genomics Canvas Viewer</title>
+
+<style>
+  :root {
+    --bg-base: #0f172a;
+    --bg-panel: #1e293b;
+    --bg-highlight: #334155;
+    --border: #334155;
+    --border-light: #475569;
+    --text-main: #f8fafc;
+    --text-muted: #94a3b8;
+    --accent: #38bdf8;
+    --accent-hover: #0284c7;
+  }
+
+  html, body {
+    margin: 0;
+    height: 100%;
+    background: var(--bg-base);
+    color: var(--text-main);
+    font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    font-size: 13px;
+    overflow: hidden;
+  }
+
+  #wrap { display: flex; height: 100%; }
+
+  /* Sidebar */
+  #sidebar {
+    width: 260px;
+    flex-shrink: 0;
+    background: var(--bg-panel);
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    z-index: 20;
+  }
+
+  .sidebar-header { padding: 20px 16px; border-bottom: 1px solid var(--border); }
+  .sidebar-header h1 { margin: 0; font-size: 14px; font-weight: 600; }
+
+  .section { padding: 16px; border-bottom: 1px solid var(--border); }
+  .section-title { font-size: 11px; text-transform: uppercase; color: var(--text-muted); margin-bottom: 12px; font-weight: 600; }
+
+  button {
+    width: 100%; margin-bottom: 8px; padding: 10px 12px;
+    background: var(--bg-base); border: 1px solid var(--border); border-radius: 6px;
+    color: var(--text-main); cursor: pointer; font-size: 13px; font-weight: 500; text-align: left;
+    transition: all 0.15s ease;
+  }
+  button:last-child { margin-bottom: 0; }
+  button:hover { background: var(--border); border-color: var(--border-light); }
+  button.danger:hover { color: #f87171; }
+  button.primary { background: var(--accent); color: #0f172a; font-weight: 600; border-color: var(--accent); }
+  button.primary:hover { background: var(--accent-hover); color: white; }
+
+  #vcf-upload { display: none; }
+  #stats { font-size: 20px; font-weight: 600; color: var(--accent); margin-top: 4px; }
+
+  /* Input & Select Forms */
+  input[type="text"], select {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 10px 12px;
+    background: var(--bg-base);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: white;
+    margin-bottom: 8px;
+    outline: none;
+    font-size: 13px;
+    font-family: inherit;
+  }
+  select {
+    appearance: none;
+    cursor: pointer;
+    background-image: url("data:image/svg+xml;charset=US-ASCII,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22292.4%22%20height%3D%22292.4%22%3E%3Cpath%20fill%3D%22%2394a3b8%22%20d%3D%22M287%2069.4a17.6%2017.6%200%200%200-13-5.4H18.4c-5%200-9.3%201.8-12.9%205.4A17.6%2017.6%200%200%200%200%2082.2c0%205%201.8%209.3%205.4%2012.9l128%20127.9c3.6%203.6%207.8%205.4%2012.8%205.4s9.2-1.8%2012.8-5.4L287%2095c3.5-3.5%205.4-7.8%205.4-12.8%200-5-1.9-9.2-5.5-12.8z%22%2F%3E%3C%2Fsvg%3E");
+    background-repeat: no-repeat;
+    background-position: right 12px top 50%;
+    background-size: 10px auto;
+  }
+  input[type="text"]:focus, select:focus { border-color: var(--accent); }
+
+  /* Main Viewport Area */
+  #center-stage { flex: 1; display: flex; position: relative; overflow: hidden; }
+  #main { flex: 1; display: flex; flex-direction: column; position: relative; background: var(--bg-base); }
+
+  /* Column Headers (Clickable) */
+  #table-header {
+    display: flex; background: var(--bg-panel); border-bottom: 1px solid var(--border);
+    padding: 0 16px; height: 40px; align-items: center; font-weight: 600;
+    color: var(--text-muted); font-size: 12px; text-transform: uppercase; z-index: 10;
+  }
+
+  .col { flex-shrink: 0; cursor: pointer; user-select: none; }
+  .col:hover { color: var(--text-main); }
+  .col-gene { width: 100px; }
+  .col-class { width: 150px; }
+  .col-locus { width: 150px; }
+  .col-type { width: 80px; }
+  .col-af { width: 80px; }
+
+  #viewport { flex: 1; overflow-y: auto; position: relative; cursor: pointer; }
+  #scroll-spacer { width: 1px; }
+  canvas { position: sticky; top: 0; left: 0; pointer-events: none; }
+
+  /* Details Panel */
+  #details-panel {
+    width: 380px; flex-shrink: 0; background: var(--bg-panel); border-left: 1px solid var(--border);
+    display: flex; flex-direction: column; transform: translateX(100%);
+    transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1); position: absolute;
+    right: 0; top: 0; bottom: 0; z-index: 30; box-shadow: -4px 0 15px rgba(0,0,0,0.2);
+  }
+  #details-panel.open { transform: translateX(0); }
+
+  .details-header { padding: 16px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; font-weight: 600; }
+  .close-btn { background: transparent; border: none; color: var(--text-muted); width: auto; padding: 4px 8px; text-align: right; margin: 0; }
+  .close-btn:hover { color: white; background: var(--bg-base); }
+
+  #details-content { padding: 16px; overflow-y: auto; flex: 1; }
+  .detail-group { margin-bottom: 16px; }
+  .detail-label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; margin-bottom: 4px; }
+  .detail-value { font-size: 13px; color: var(--text-main); word-break: break-all; background: var(--bg-base); padding: 8px; border-radius: 4px; border: 1px solid var(--border); font-family: monospace; }
+  
+  .flex-row { display: flex; gap: 12px; }
+  .flex-row .detail-group { flex: 1; }
+
+  /* Sample Table Styling */
+  .sample-table-wrap { max-height: 250px; overflow-y: auto; border: 1px solid var(--border); border-radius: 4px; background: var(--bg-base); }
+  table.samples { width: 100%; border-collapse: collapse; font-size: 12px; text-align: left; }
+  table.samples th, table.samples td { padding: 6px 8px; border-bottom: 1px solid var(--border); }
+  table.samples th { background: var(--bg-panel); position: sticky; top: 0; color: var(--text-muted); font-weight: 600; text-transform: uppercase; font-size: 10px; }
+  table.samples tr:last-child td { border-bottom: none; }
+</style>
+</head>
+<body>
+
+<div id="wrap">
+  <div id="sidebar">
+    <div class="sidebar-header"><h1>Genomics Viewer</h1></div>
+
+    <div class="section">
+      <div class="section-title">Data Source</div>
+      <input type="file" id="vcf-upload" accept=".vcf,.txt" onchange="handleFileUpload(event)">
+      <button class="primary" onclick="document.getElementById('vcf-upload').click()">Upload Local VCF</button>
+      <button onclick="loadDemo()">Load Demo</button>
+    </div>
+
+    <div class="section">
+      <div class="section-title">Search & Filter</div>
+      
+      <input type="text" id="search-box" placeholder="Search Gene or ID..." onkeyup="applyDynamicFilters()">
+      
+      <select id="filter-chrom" onchange="applyDynamicFilters()">
+        <option value="">All Chromosomes</option>
+      </select>
+      
+      <select id="filter-class" onchange="applyDynamicFilters()">
+        <option value="">All Classifications</option>
+      </select>
+      
+      <select id="filter-type" onchange="applyDynamicFilters()">
+        <option value="">All Types</option>
+      </select>
+      
+      <button onclick="clearFilters()" class="danger" style="margin-top: 8px;">Clear Filters</button>
+    </div>
+
+    <div class="section" style="border-bottom: none;">
+      <div class="section-title">Active Variants</div>
+      <div id="stats">0</div>
+    </div>
+  </div>
+
+  <div id="center-stage">
+    <div id="main">
+      <div id="table-header">
+        <div class="col col-gene" onclick="sortBy('gene')">Gene / ID ↕</div>
+        <div class="col col-class" onclick="sortBy('classification')">Class ↕</div>
+        <div class="col col-locus" onclick="sortBy('pos')">Locus ↕</div>
+        <div class="col col-type" onclick="sortBy('type')">Type ↕</div>
+        <div class="col col-af" onclick="sortBy('af')">AF ↕</div>
+      </div>
+      
+      <div id="viewport">
+        <canvas id="cv"></canvas>
+        <div id="scroll-spacer"></div>
+      </div>
+    </div>
+
+    <div id="details-panel">
+      <div class="details-header">
+        <span id="dt-title">Variant Details</span>
+        <button class="close-btn" onclick="closeDetails()">✕</button>
+      </div>
+      <div id="details-content"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+// =====================
+// CONFIG & DOM
+// =====================
+const ROW_H = 34; 
+const canvas = document.getElementById("cv");
+const ctx = canvas.getContext("2d");
+const viewport = document.getElementById("viewport");
+const scrollSpacer = document.getElementById("scroll-spacer");
+const detailsPanel = document.getElementById("details-panel");
+const detailsContent = document.getElementById("details-content");
+const dtTitle = document.getElementById("dt-title");
+
+// =====================
+// DATA STORAGE
+// =====================
+const V = {
+  chrom: [], pos: [], gene: [], type: [], af: [], classification: [],
+  idCol: [], ref: [], alt: [], qual: [], filter: [], rawInfo: [],
+  format: [], samples: [] 
+};
+
+let SAMPLES = []; 
+let N = 0;
+
+// Dynamic Filter Storage
+const UNIQUE = { chrom: new Set(), class: new Set(), type: new Set() };
+const IDX = { chrom: new Map(), class: new Map(), type: new Map() };
+
+let activeFilters = { chrom: "", class: "", type: "" };
+let searchQuery = "";
+let visible = [];
+let selectedVariantId = null;
+
+let sortCol = null;
+let sortAsc = true;
+
+// =====================
+// CORE LOGIC
+// =====================
+function resize() {
+  const dpr = window.devicePixelRatio || 1;
+  const rect = viewport.getBoundingClientRect();
+  canvas.width = rect.width * dpr; canvas.height = rect.height * dpr;
+  canvas.style.width = rect.width + "px"; canvas.style.height = rect.height + "px";
+  ctx.scale(dpr, dpr);
+  render();
+}
+window.addEventListener("resize", resize);
+setTimeout(resize, 0); 
+
+function addIndex(map, key, id) {
+  if (!map.has(key)) map.set(key, []);
+  map.get(key).push(id);
+}
+
+// =====================
+// DYNAMIC FILTER ENGINE
+// =====================
+function populateDropdowns() {
+  const buildOptions = (set, defaultText, formatFn = null) => {
+    let html = `<option value="">${defaultText}</option>`;
+    // Sort logic (handle numeric sorting for chromosomes if possible)
+    let sortedKeys = Array.from(set).sort((a, b) => {
+      let numA = parseInt(a), numB = parseInt(b);
+      if (!isNaN(numA) && !isNaN(numB)) return numA - numB;
+      return a.localeCompare(b);
+    });
+
+    sortedKeys.forEach(val => {
+      const displayVal = formatFn ? formatFn(val) : val;
+      html += `<option value="${val}">${displayVal}</option>`;
+    });
+    return html;
+  };
+
+  document.getElementById("filter-chrom").innerHTML = buildOptions(UNIQUE.chrom, "All Chromosomes", v => `chr${v}`);
+  document.getElementById("filter-class").innerHTML = buildOptions(UNIQUE.class, "All Classifications", formatLabel);
+  document.getElementById("filter-type").innerHTML = buildOptions(UNIQUE.type, "All Types");
+}
+
+function applyDynamicFilters() {
+  searchQuery = document.getElementById('search-box').value.toLowerCase();
+  activeFilters.chrom = document.getElementById("filter-chrom").value;
+  activeFilters.class = document.getElementById("filter-class").value;
+  activeFilters.type = document.getElementById("filter-type").value;
+  
+  recomputeVisible();
+  closeDetails();
+}
+
+function clearFilters() { 
+  document.getElementById('search-box').value = ""; 
+  document.getElementById("filter-chrom").value = "";
+  document.getElementById("filter-class").value = "";
+  document.getElementById("filter-type").value = "";
+  applyDynamicFilters();
+}
+
+function recomputeVisible() {
+  let sets = [];
+
+  if (activeFilters.chrom) sets.push(IDX.chrom.get(activeFilters.chrom) || []);
+  if (activeFilters.class) sets.push(IDX.class.get(activeFilters.class) || []);
+  if (activeFilters.type) sets.push(IDX.type.get(activeFilters.type) || []);
+
+  if (sets.length === 0) {
+    visible = Array.from({length: N}, (_, i) => i);
+  } else {
+    visible = sets.reduce((a, b) => intersect(a, b));
+  }
+
+  // Apply Text Search
+  if (searchQuery) {
+    visible = visible.filter(id => 
+      V.gene[id].toLowerCase().includes(searchQuery) || 
+      V.idCol[id].toLowerCase().includes(searchQuery)
+    );
+  }
+
+  if (sortCol) applySort();
+
+  scrollSpacer.style.height = (visible.length * ROW_H) + "px";
+  updateStats();
+  viewport.scrollTop = 0;
+  render();
+}
+
+function intersect(a, b) {
+  const out = []; const set = new Set(b);
+  for (let i = 0; i < a.length; i++) if (set.has(a[i])) out.push(a[i]);
+  return out;
+}
+
+function sortBy(col) {
+  if (sortCol === col) sortAsc = !sortAsc;
+  else { sortCol = col; sortAsc = true; }
+  applySort();
+  render();
+}
+
+function applySort() {
+  if (!sortCol) return;
+  visible.sort((a, b) => {
+    let valA = sortCol === 'pos' ? V.pos[a] : V[sortCol][a];
+    let valB = sortCol === 'pos' ? V.pos[b] : V[sortCol][b];
+    
+    if (typeof valA === 'string') { valA = valA.toLowerCase(); valB = valB.toLowerCase(); }
+    
+    if (valA < valB) return sortAsc ? -1 : 1;
+    if (valA > valB) return sortAsc ? 1 : -1;
+    return 0;
+  });
+}
+
+// =====================
+// RENDERING
+// =====================
+function roundRect(ctx, x, y, w, h, r) {
+  ctx.beginPath(); ctx.moveTo(x + r, y); ctx.lineTo(x + w - r, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + r); ctx.lineTo(x + w, y + h - r);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h); ctx.lineTo(x + r, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - r); ctx.lineTo(x, y + r);
+  ctx.quadraticCurveTo(x, y, x + r, y); ctx.closePath();
+}
+
+function render() {
+  const scrollTop = viewport.scrollTop;
+  const h = parseFloat(canvas.style.height) || viewport.clientHeight;
+  const start = Math.floor(scrollTop / ROW_H);
+  const end = Math.min(visible.length, start + Math.ceil(h / ROW_H) + 1);
+
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.font = "13px Inter, -apple-system, sans-serif";
+  ctx.textBaseline = "middle";
+
+  for (let i = start; i < end; i++) {
+    const id = visible[i];
+    const y = (i * ROW_H) - scrollTop;
+    const cy = y + ROW_H / 2;
+
+    ctx.fillStyle = (id === selectedVariantId) ? "rgba(56, 189, 248, 0.15)" : ((i % 2 === 0) ? "#1e293b" : "#0f172a");
+    ctx.fillRect(0, y, 2000, ROW_H);
+    if (id === selectedVariantId) { ctx.fillStyle = "#38bdf8"; ctx.fillRect(0, y, 4, ROW_H); }
+
+    const xGene = 16, xClass = 116, xLocus = 266, xType = 416, xAf = 496;
+
+    ctx.fillStyle = "#f8fafc"; ctx.font = "500 13px Inter, sans-serif";
+    ctx.fillText(V.gene[id], xGene, cy);
+
+    const cls = V.classification[id];
+    ctx.fillStyle = color(cls); roundRect(ctx, xClass, y + 6, 120, ROW_H - 12, 10); ctx.fill();
+    ctx.fillStyle = "#ffffff"; ctx.font = "600 11px Inter, sans-serif"; ctx.textAlign = "center";
+    ctx.fillText(formatLabel(cls), xClass + 60, cy); ctx.textAlign = "left";
+
+    ctx.fillStyle = "#94a3b8"; ctx.font = "13px Inter, sans-serif";
+    ctx.fillText(`chr${V.chrom[id]}:${V.pos[id].toLocaleString()}`, xLocus, cy);
+
+    ctx.fillStyle = "#cbd5e1"; ctx.fillText(V.type[id], xType, cy);
+    ctx.fillText(V.af[id].toFixed(4), xAf, cy);
+  }
+}
+
+function color(c) {
+  if (c === "pathogenic") return "#ef4444"; if (c === "likely_pathogenic") return "#f97316"; 
+  if (c === "benign") return "#10b981"; if (c === "likely_benign") return "#84cc16"; return "#64748b";
+}
+function formatLabel(c) {
+  if (c === "pathogenic") return "Pathogenic"; if (c === "likely_pathogenic") return "Likely Pathogenic";
+  if (c === "benign") return "Benign"; if (c === "likely_benign") return "Likely Benign";
+  if (c === "vus") return "VUS"; return "Unknown";
+}
+
+// =====================
+// UI INTERACTIONS
+// =====================
+viewport.addEventListener("click", (e) => {
+  const rect = viewport.getBoundingClientRect();
+  const rowIndex = Math.floor((e.clientY - rect.top + viewport.scrollTop) / ROW_H);
+  if (rowIndex >= 0 && rowIndex < visible.length) {
+    selectedVariantId = visible[rowIndex];
+    openDetails(selectedVariantId);
+    render();
+  }
+});
+
+viewport.addEventListener("scroll", () => requestAnimationFrame(render));
+
+function openDetails(id) {
+  dtTitle.innerText = `chr${V.chrom[id]}:${V.pos[id]}`;
+  const formattedInfo = V.rawInfo[id] !== "." ? V.rawInfo[id].split(';').join('\n') : "No INFO available";
+
+  let sampleHtml = '';
+  if (SAMPLES.length > 0 && V.samples[id] && V.samples[id].length > 0) {
+    const formatKeys = V.format[id].split(':');
+    const gtIdx = formatKeys.indexOf('GT');
+    const dsIdx = formatKeys.indexOf('DS');
+    
+    sampleHtml = `
+      <div class="detail-group">
+        <div class="detail-label">Sample Genotypes</div>
+        <div class="sample-table-wrap">
+          <table class="samples">
+            <tr><th>Sample</th><th>GT</th><th>DS</th></tr>
+            ${SAMPLES.map((sName, i) => {
+              const sData = (V.samples[id][i] || "").split(':');
+              const gt = gtIdx > -1 ? (sData[gtIdx] || "-") : "-";
+              const ds = dsIdx > -1 ? (sData[dsIdx] || "-") : "-";
+              const shortName = sName.length > 15 ? sName.substring(0, 15) + "..." : sName;
+              return `<tr><td>${shortName}</td><td style="font-weight:600">${gt}</td><td>${ds}</td></tr>`;
+            }).join('')}
+          </table>
+        </div>
+      </div>
+    `;
+  }
+
+  detailsContent.innerHTML = `
+    <div class="flex-row">
+      <div class="detail-group"><div class="detail-label">Gene / ID</div><div class="detail-value">${V.gene[id]}</div></div>
+      <div class="detail-group"><div class="detail-label">VCF ID</div><div class="detail-value">${V.idCol[id]}</div></div>
+    </div>
+    <div class="flex-row">
+      <div class="detail-group"><div class="detail-label">Ref</div><div class="detail-value">${V.ref[id]}</div></div>
+      <div class="detail-group"><div class="detail-label">Alt</div><div class="detail-value" style="color: var(--accent);">${V.alt[id]}</div></div>
+    </div>
+    <div class="flex-row">
+      <div class="detail-group"><div class="detail-label">Quality</div><div class="detail-value">${V.qual[id]}</div></div>
+      <div class="detail-group"><div class="detail-label">Filter</div><div class="detail-value">${V.filter[id]}</div></div>
+    </div>
+    ${sampleHtml}
+    <div class="detail-group">
+      <div class="detail-label">Raw INFO Field</div>
+      <div class="detail-value" style="white-space: pre-wrap; font-size: 11px;">${formattedInfo}</div>
+    </div>
+  `;
+  detailsPanel.classList.add("open");
+}
+
+function closeDetails() { detailsPanel.classList.remove("open"); selectedVariantId = null; render(); }
+function updateStats() { document.getElementById("stats").innerText = visible.length.toLocaleString(); }
+
+function clearAll() {
+  // clear data
+  Object.keys(V).forEach(key => V[key] = []);
+  
+  // clear indexes & uniques
+  IDX.chrom.clear(); IDX.class.clear(); IDX.type.clear();
+  UNIQUE.chrom.clear(); UNIQUE.class.clear(); UNIQUE.type.clear();
+  
+  // reset Global Variables
+  SAMPLES = [];
+  N = 0; 
+  visible = []; 
+  selectedVariantId = null; 
+  
+  // reset Filter States
+  activeFilters = { chrom: "", class: "", type: "" };
+  searchQuery = "";
+  
+  // reset UI Elements
+  viewport.scrollTop = 0; 
+  closeDetails();
+  document.getElementById("vcf-upload").value = ""; 
+  document.getElementById('search-box').value = "";
+}
+
+function pushVariant(v) {
+  const id = N++;
+  V.chrom.push(v.chrom); V.pos.push(v.pos); V.gene.push(v.gene); V.type.push(v.type);
+  V.af.push(v.af); V.classification.push(v.class); V.idCol.push(v.idCol || ".");
+  V.ref.push(v.ref || "-"); V.alt.push(v.alt || "-"); V.qual.push(v.qual || ".");
+  V.filter.push(v.filter || "."); V.rawInfo.push(v.rawInfo || ".");
+  V.format.push(v.format || ""); V.samples.push(v.samples || []);
+
+  // indexes for fast filtering
+  addIndex(IDX.chrom, v.chrom, id); 
+  addIndex(IDX.class, v.class, id);
+  addIndex(IDX.type, v.type, id);
+
+  // unique values
+  UNIQUE.chrom.add(v.chrom);
+  UNIQUE.class.add(v.class);
+  UNIQUE.type.add(v.type);
+}
+
+// =====================
+// FILE PARSER
+// =====================
+function handleFileUpload(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = function(e) { parseVCFData(e.target.result); };
+  reader.readAsText(file);
+}
+
+function parseVCFData(textData) {
+  clearAll();
+  const lines = textData.split(/\r?\n/);
+  
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (!line) continue;
+    
+    // Extract Sample Names
+    if (line.startsWith('#CHROM')) {
+      const headerCols = line.split('\t');
+      if (headerCols.length > 9) SAMPLES = headerCols.slice(9);
+      continue;
+    }
+    
+    if (line.startsWith('#')) continue;
+    
+    const cols = line.split('\t');
+    if (cols.length < 8) continue;
+    
+    const rawChrom = cols[0]; const pos = parseInt(cols[1], 10);
+    const idCol = cols[2]; const ref = cols[3]; const alt = cols[4];
+    const qual = cols[5]; const filter = cols[6]; const info = cols[7];
+    
+    const formatStr = cols.length > 8 ? cols[8] : "";
+    const sampleDataArr = cols.length > 9 ? cols.slice(9) : [];
+
+    const chrom = rawChrom.replace(/^chr/i, '');
+    const type = (ref.length === alt.length && ref.length === 1) ? "SNV" : "INDEL";
+    
+    let gene = "Unknown";
+    const geneMatch = info.match(/GENEINFO=([^:;]+)/i) || info.match(/GENE=([^;]+)/i);
+    if (geneMatch) gene = geneMatch[1]; else if (idCol && idCol !== ".") gene = idCol; 
+    
+    let af = 0.0; const afMatch = info.match(/AF=([\d.eE+-]+)/i);
+    if (afMatch) af = parseFloat(afMatch[1]);
+    
+    let cls = "vus"; const infoLower = info.toLowerCase();
+    if (infoLower.includes("pathogenic") && !infoLower.includes("likely")) cls = "pathogenic";
+    else if (infoLower.includes("likely_pathogenic") || infoLower.includes("likely pathogenic")) cls = "likely_pathogenic";
+    else if (infoLower.includes("benign") && !infoLower.includes("likely")) cls = "benign";
+    else if (infoLower.includes("likely_benign") || infoLower.includes("likely benign")) cls = "likely_benign";
+
+    pushVariant({
+      chrom: chrom, pos: pos, gene: gene, type: type, af: af || 0.0, class: cls,
+      idCol: idCol, ref: ref, alt: alt, qual: qual, filter: filter, rawInfo: info,
+      format: formatStr, samples: sampleDataArr
+    });
+  }
+  populateDropdowns();
+  recomputeVisible();
+}
+
+// =====================
+// DATA LOADERS
+// =====================
+function loadDemo() {
+  clearAll();
+  SAMPLES = ["Patient_001", "Patient_002", "Control_A"];
+  const demo = [
+    {chrom:"17", pos:41243452, gene:"BRCA1", type:"SNV", af:0.005, class:"pathogenic", idCol:"rs123456", ref:"A", alt:"T", qual:"99", filter:"PASS", rawInfo:"GENE=BRCA1;AF=0.005;CLIN_SIG=pathogenic", format:"GT:DS:DP", samples:["0|1:1.5:40", "1|1:2.0:35", "0|0:0.0:42"]},
+    {chrom:"17", pos:7577545, gene:"TP53", type:"SNV", af:0.420, class:"vus", idCol:".", ref:"C", alt:"G", qual:"50", filter:"PASS", rawInfo:"GENE=TP53;AF=0.420", format:"GT:DS:DP", samples:["0|0:0.0:20", "0|1:1.1:18", "0|1:0.9:22"]},
+    {chrom:"1", pos:112043212, gene:"APC", type:"INDEL", af:0.021, class:"likely_benign", idCol:".", ref:"GTT", alt:"G", qual:"120", filter:"PASS", rawInfo:"GENE=APC;AF=0.021;CLIN_SIG=likely_benign", format:"GT:DS:DP", samples:["1|1:2.0:50", "0|0:0.0:60", "0|0:0.0:45"]},
+    {chrom:"2", pos:45214, gene:"MSH2", type:"INDEL", af:0.150, class:"benign", idCol:".", ref:"AT", alt:"A", qual:"200", filter:"PASS", rawInfo:"GENE=MSH2;AF=0.150", format:"GT", samples:["0|0", "1|1", "0|1"]}
+  ];
+  demo.forEach(pushVariant);
+  populateDropdowns();
+  recomputeVisible();
+}
+
+loadDemo();
+</script>
+</body>
+</html>
