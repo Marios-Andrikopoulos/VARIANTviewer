@@ -55,8 +55,12 @@
   button:last-child { margin-bottom: 0; }
   button:hover { background: var(--border); border-color: var(--border-light); }
   button.danger:hover { color: #f87171; }
-  button.primary { background: var(--accent); color: #0f172a; font-weight: 600; border-color: var(--accent); }
+  button.primary { background: var(--accent); color: #0f172a; font-weight: 600; border-color: var(--accent); text-align: center; }
   button.primary:hover { background: var(--accent-hover); color: white; }
+  
+  /* Centered buttons for empty state */
+  .btn-group { display: flex; gap: 12px; margin-top: 24px; width: 100%; max-width: 300px; }
+  .btn-group button { text-align: center; margin-bottom: 0; }
 
   #vcf-upload { display: none; }
   #stats { font-size: 20px; font-weight: 600; color: var(--accent); margin-top: 4px; }
@@ -89,7 +93,22 @@
   #center-stage { flex: 1; display: flex; position: relative; overflow: hidden; }
   #main { flex: 1; display: flex; flex-direction: column; position: relative; background: var(--bg-base); }
 
-  /* Column Headers (Clickable) */
+  /* Empty State Overlay */
+  #empty-state {
+    position: absolute;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: var(--bg-base);
+    z-index: 50; /* Sits above the table and headers */
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+  }
+  #empty-state h2 { margin: 0 0 8px 0; font-size: 20px; font-weight: 600; color: var(--text-main); }
+  #empty-state p { margin: 0; color: var(--text-muted); font-size: 14px; max-width: 400px; line-height: 1.5; }
+
+  /* Column Headers */
   #table-header {
     display: flex; background: var(--bg-panel); border-bottom: 1px solid var(--border);
     padding: 0 16px; height: 40px; align-items: center; font-weight: 600;
@@ -146,8 +165,8 @@
     <div class="section">
       <div class="section-title">Data Source</div>
       <input type="file" id="vcf-upload" accept=".vcf,.txt" onchange="handleFileUpload(event)">
-      <button class="primary" onclick="document.getElementById('vcf-upload').click()">Upload Local VCF</button>
-      <button onclick="loadDemo()">Load Demo</button>
+      <button onclick="document.getElementById('vcf-upload').click()">Upload Local VCF</button>
+      <button onclick="clearAll()" class="danger">Clear Data</button>
     </div>
 
     <div class="section">
@@ -178,6 +197,22 @@
 
   <div id="center-stage">
     <div id="main">
+      
+      <div id="empty-state">
+        <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="var(--border-light)" stroke-width="1.5" style="margin-bottom: 16px;">
+          <path d="M12 22C17.5228 22 22 17.5228 22 12C22 6.47715 17.5228 2 12 2C6.47715 2 2 6.47715 2 12C2 17.5228 6.47715 22 12 22Z"/>
+          <path d="M8 14C8 14 9.5 16 12 16C14.5 16 16 14 16 14"/>
+          <path d="M9 9H9.01"/>
+          <path d="M15 9H15.01"/>
+        </svg>
+        <h2>No Genomic Data Loaded</h2>
+        <p>Upload a standard VCF file to visualize variants, or load the sample dataset to explore the tool's features.</p>
+        <div class="btn-group">
+          <button class="primary" onclick="document.getElementById('vcf-upload').click()">Upload VCF</button>
+          <button onclick="loadDemo()">Load Demo</button>
+        </div>
+      </div>
+
       <div id="table-header">
         <div class="col col-gene" onclick="sortBy('gene')">Gene / ID ↕</div>
         <div class="col col-class" onclick="sortBy('classification')">Class ↕</div>
@@ -214,6 +249,7 @@ const scrollSpacer = document.getElementById("scroll-spacer");
 const detailsPanel = document.getElementById("details-panel");
 const detailsContent = document.getElementById("details-content");
 const dtTitle = document.getElementById("dt-title");
+const emptyState = document.getElementById("empty-state");
 
 // =====================
 // DATA STORAGE
@@ -258,13 +294,16 @@ function addIndex(map, key, id) {
   map.get(key).push(id);
 }
 
+function checkEmptyState() {
+  emptyState.style.display = (N === 0) ? 'flex' : 'none';
+}
+
 // =====================
 // DYNAMIC FILTER ENGINE
 // =====================
 function populateDropdowns() {
   const buildOptions = (set, defaultText, formatFn = null) => {
     let html = `<option value="">${defaultText}</option>`;
-    // Sort logic (handle numeric sorting for chromosomes if possible)
     let sortedKeys = Array.from(set).sort((a, b) => {
       let numA = parseInt(a), numB = parseInt(b);
       if (!isNaN(numA) && !isNaN(numB)) return numA - numB;
@@ -369,6 +408,8 @@ function roundRect(ctx, x, y, w, h, r) {
 }
 
 function render() {
+  if (N === 0) return; // Skip rendering if empty
+  
   const scrollTop = viewport.scrollTop;
   const h = parseFloat(canvas.style.height) || viewport.clientHeight;
   const start = Math.floor(scrollTop / ROW_H);
@@ -419,6 +460,7 @@ function formatLabel(c) {
 // UI INTERACTIONS
 // =====================
 viewport.addEventListener("click", (e) => {
+  if (N === 0) return;
   const rect = viewport.getBoundingClientRect();
   const rowIndex = Math.floor((e.clientY - rect.top + viewport.scrollTop) / ROW_H);
   if (rowIndex >= 0 && rowIndex < visible.length) {
@@ -428,7 +470,9 @@ viewport.addEventListener("click", (e) => {
   }
 });
 
-viewport.addEventListener("scroll", () => requestAnimationFrame(render));
+viewport.addEventListener("scroll", () => {
+  if (N > 0) requestAnimationFrame(render);
+});
 
 function openDetails(id) {
   dtTitle.innerText = `chr${V.chrom[id]}:${V.pos[id]}`;
@@ -485,28 +529,23 @@ function closeDetails() { detailsPanel.classList.remove("open"); selectedVariant
 function updateStats() { document.getElementById("stats").innerText = visible.length.toLocaleString(); }
 
 function clearAll() {
-  // clear data
   Object.keys(V).forEach(key => V[key] = []);
-  
-  // clear indexes & uniques
   IDX.chrom.clear(); IDX.class.clear(); IDX.type.clear();
   UNIQUE.chrom.clear(); UNIQUE.class.clear(); UNIQUE.type.clear();
-  
-  // reset Global Variables
   SAMPLES = [];
-  N = 0; 
-  visible = []; 
-  selectedVariantId = null; 
+  N = 0; visible = []; selectedVariantId = null; viewport.scrollTop = 0; closeDetails();
   
-  // reset Filter States
   activeFilters = { chrom: "", class: "", type: "" };
   searchQuery = "";
   
-  // reset UI Elements
-  viewport.scrollTop = 0; 
-  closeDetails();
   document.getElementById("vcf-upload").value = ""; 
   document.getElementById('search-box').value = "";
+  populateDropdowns();
+  updateStats();
+  
+  // Wipe canvas and show empty state
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  checkEmptyState();
 }
 
 function pushVariant(v) {
@@ -517,12 +556,10 @@ function pushVariant(v) {
   V.filter.push(v.filter || "."); V.rawInfo.push(v.rawInfo || ".");
   V.format.push(v.format || ""); V.samples.push(v.samples || []);
 
-  // indexes for fast filtering
   addIndex(IDX.chrom, v.chrom, id); 
   addIndex(IDX.class, v.class, id);
   addIndex(IDX.type, v.type, id);
 
-  // unique values
   UNIQUE.chrom.add(v.chrom);
   UNIQUE.class.add(v.class);
   UNIQUE.type.add(v.type);
@@ -547,7 +584,6 @@ function parseVCFData(textData) {
     const line = lines[i];
     if (!line) continue;
     
-    // Extract Sample Names
     if (line.startsWith('#CHROM')) {
       const headerCols = line.split('\t');
       if (headerCols.length > 9) SAMPLES = headerCols.slice(9);
@@ -590,6 +626,7 @@ function parseVCFData(textData) {
   }
   populateDropdowns();
   recomputeVisible();
+  checkEmptyState(); // Hide empty state
 }
 
 // =====================
@@ -607,9 +644,11 @@ function loadDemo() {
   demo.forEach(pushVariant);
   populateDropdowns();
   recomputeVisible();
+  checkEmptyState(); // Hide empty state
 }
 
-loadDemo();
+// Initialize tool in empty state
+checkEmptyState();
 </script>
 </body>
 </html>
