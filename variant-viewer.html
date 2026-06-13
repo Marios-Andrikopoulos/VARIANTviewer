@@ -88,7 +88,6 @@
       line-height: 1.2;
     }
 
-    /* Tab Switcher */
     .view-tabs { display: flex; padding: 16px 16px 0 16px; border-bottom: 1px solid var(--border); }
     .view-tab { 
       flex: 1; text-align: center; padding: 8px 0; cursor: pointer;
@@ -286,6 +285,16 @@
             </div>
           </div>
 
+          <div class="chart-card">
+            <div class="chart-title">Allele Frequency (AF)</div>
+            <div class="chart-wrapper"><canvas id="chart-af"></canvas></div>
+          </div>
+
+          <div class="chart-card">
+            <div class="chart-title">Variants by Chromosome</div>
+            <div class="chart-wrapper"><canvas id="chart-chrom"></canvas></div>
+          </div>
+
         </div>
       </div>
     </div>
@@ -349,16 +358,19 @@ const COLORS = {
 // CORE LOGIC & TABS
 // =====================
 function switchTab(tab) {
+  console.log("switching", tab);
   activeView = tab;
   document.getElementById('tab-btn-table').classList.toggle('active', tab === 'table');
   document.getElementById('tab-btn-dash').classList.toggle('active', tab === 'dash');
   document.getElementById('view-table').classList.toggle('active', tab === 'table');
   document.getElementById('view-dash').classList.toggle('active', tab === 'dash');
   
+  closeDetails();
+
   if (tab === 'table') resize();
   if (tab === 'dash') renderDashboard();
   
-  closeDetails();
+  
 }
 
 function resize() {
@@ -552,10 +564,12 @@ function setupCanvasScale(id) {
 function renderDashboard() {
   if (N === 0 || activeView !== 'dash') return;
 
-  // 1. Aggregate Data based on current filters
+  // 1. Aggregate Data
   const stats = {
     types: { SNV: 0, INDEL: 0 },
-    classes: { pathogenic: 0, likely_pathogenic: 0, vus: 0, likely_benign: 0, benign: 0 }
+    classes: { pathogenic: 0, likely_pathogenic: 0, vus: 0, likely_benign: 0, benign: 0 },
+    chroms: {},
+    af: { "Rare (<0.01)": 0, "Low (0.01-0.05)": 0, "Common (>0.05)": 0 }
   };
 
   for(let i=0; i<visible.length; i++) {
@@ -563,11 +577,62 @@ function renderDashboard() {
     const t = V.type[id]; const c = V.classification[id];
     if (stats.types[t] !== undefined) stats.types[t]++;
     if (stats.classes[c] !== undefined) stats.classes[c]++;
-  }
 
-  drawDonutChart('chart-types', stats.types, visible.length);
-  drawBarChart('chart-class', stats.classes, visible.length);
+    const ch = V.chrom[id];
+    stats.chroms[ch] = (stats.chroms[ch] || 0) + 1;
+
+    const af = V.af[id];
+    if (af < 0.01) stats.af["Rare (<0.01)"]++;
+    else if (af < 0.05) stats.af["Low (0.01-0.05)"]++;
+    else stats.af["Common (>0.05)"]++;
+  }
+  
+  const donutTotal = Object.values(stats.types).reduce((a, b) => a + b, 0);
+  drawDonutChart('chart-types', stats.types, donutTotal);
+
+  // Clinical Significance (Sorted Manually)
+  drawBarChart('chart-class', stats.classes, visible.length, [
+    'pathogenic', 'likely_pathogenic', 'vus', 'likely_benign', 'benign'
+  ]);
+
+  // AF Buckets (Sorted Manually)
+  drawBarChart('chart-af', stats.af, visible.length, [
+    "Rare (<0.01)", "Low (0.01-0.05)", "Common (>0.05)"
+  ]);
+
+  // Chromosomes (Sorted Numerically)
+  const sortedChroms = Object.keys(stats.chroms).sort((a, b) => {
+    const n = x => x === 'X' ? 23 : x === 'Y' ? 24 : parseInt(x);
+    return n(a) - n(b);
+  });
+  drawBarChart('chart-chrom', stats.chroms, visible.length, sortedChroms);
 }
+
+const LABEL_MAP = {
+  // Classifications
+  pathogenic:        'Pathogenic',
+  likely_pathogenic: 'Likely Pathogenic',
+  vus:               'VUS',
+  likely_benign:     'Likely Benign',
+  benign:            'Benign',
+  // Types
+  SNV:               'SNV',
+  INDEL:             'INDEL',
+  MNV:               'MNV',
+  // AF buckets (keys match exactly what you put in stats.af)
+  'Rare (<0.01)':       'Rare (<1%)',
+  'Low (0.01-0.05)':    'Low (1–5%)',
+  'Common (>0.05)':     'Common (>5%)',
+};
+
+function safeLabel(key) {
+  if (LABEL_MAP[key] !== undefined) return LABEL_MAP[key];
+  // Chromosomes: bare numbers or X/Y
+  if (/^\d+$/.test(key) || key === 'X' || key === 'Y') return `chr${key}`;
+  // Last resort: replace underscores, title-case
+  return key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+}
+
 
 function drawDonutChart(canvasId, data, total) {
   const { ctx, w, h } = setupCanvasScale(canvasId);
@@ -612,42 +677,53 @@ function drawDonutChart(canvasId, data, total) {
   ctx.fillText(total.toLocaleString(), cx, cy + 10);
 }
 
-function drawBarChart(canvasId, data, total) {
+function drawBarChart(canvasId, data, total, customKeys = null, labelFn = safeLabel) {
   const { ctx, w, h } = setupCanvasScale(canvasId);
   ctx.clearRect(0, 0, w, h);
   if (total === 0) return;
 
-  const keys = ['pathogenic', 'likely_pathogenic', 'vus', 'likely_benign', 'benign'];
-  const maxVal = Math.max(...Object.values(data), 1); // Avoid div by zero
+  // Use custom keys if provided (for manual sorting), otherwise use object keys
+  const keys = customKeys || Object.keys(data);
+  const maxVal = Math.max(...Object.values(data), 1);
   
-  const barH = 24; const gap = 12;
-  const startY = (h - (keys.length * (barH + gap) - gap)) / 2;
-  const labelW = 110;
-  const maxBarW = w - labelW - 50;
+  const barH = 24; 
+  const gap = 12;
+  const totalH = keys.length * barH + (keys.length - 1) * gap;
+  const startY = (h - totalH) / 2;
+  
+  const labelW = 120;
+  const maxBarW = Math.max(w - labelW - 60, 50);
 
   keys.forEach((key, i) => {
-    const val = data[key];
+    const val = data[key] || 0;
     const y = startY + i * (barH + gap);
     
     // Label
-    ctx.fillStyle = "#94a3b8"; ctx.font = "12px Inter";
-    ctx.textAlign = "right"; ctx.textBaseline = "middle";
-    ctx.fillText(formatLabel(key), labelW - 10, y + barH / 2);
+    ctx.fillStyle = "#94a3b8"; 
+    ctx.font = "12px Inter";
+    ctx.textAlign = "right"; 
+    ctx.textBaseline = "middle";
+    // We try to format if it's a known classification, otherwise use the raw key
+    const label = labelFn(key);
+    ctx.fillText(label, labelW - 10, y + barH / 2);
 
     // Track Background
     ctx.fillStyle = "rgba(51, 65, 85, 0.4)";
-    roundRect(ctx, labelW, y, maxBarW, barH, 4); ctx.fill();
+    roundRect(ctx, labelW, y, maxBarW, barH, 4); 
+    ctx.fill();
 
     // Bar Fill
     const barW = (val / maxVal) * maxBarW;
     if (barW > 0) {
-      ctx.fillStyle = COLORS[key];
-      roundRect(ctx, labelW, y, Math.max(barW, 4), barH, 4); ctx.fill();
+      ctx.fillStyle = COLORS[key] || "#38bdf8"; // Fallback to accent blue
+      roundRect(ctx, labelW, y, Math.max(barW, 4), barH, 4); 
+      ctx.fill();
     }
 
     // Value Text
-    ctx.fillStyle = "#f8fafc"; ctx.textAlign = "left";
-    ctx.fillText(val.toLocaleString(), labelW + Math.max(barW, 4) + 8, y + barH / 2);
+    ctx.fillStyle = "#f8fafc"; 
+    ctx.textAlign = "left";
+    ctx.fillText(Number(val).toLocaleString(), labelW + Math.max(barW, 4) + 8, y + barH / 2);
   });
 }
 
@@ -718,7 +794,12 @@ function openDetails(id) {
   detailsPanel.classList.add("open");
 }
 
-function closeDetails() { detailsPanel.classList.remove("open"); selectedVariantId = null; if(activeView==='table') render(); }
+function closeDetails() {
+  console.log("closing");
+  detailsPanel.classList.remove("open");
+  selectedVariantId = null;
+  if (activeView === 'table') render();
+}
 
 function clearAll() {
   Object.keys(V).forEach(key => V[key] = []);
