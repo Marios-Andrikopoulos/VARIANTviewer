@@ -329,7 +329,7 @@ let activeView = 'table';
 // DATA STORAGE
 // =====================
 const V = {
-  chrom: [], pos: [], gene: [], type: [], af: [], classification: [],
+  chrom: [], assembly: [], pos: [], gene: [], type: [], af: [], classification: [],
   idCol: [], ref: [], alt: [], qual: [], filter: [], rawInfo: [],
   format: [], samples: [] 
 };
@@ -564,7 +564,7 @@ function setupCanvasScale(id) {
 function renderDashboard() {
   if (N === 0 || activeView !== 'dash') return;
 
-  // 1. Aggregate Data
+  // Aggregate Data
   const stats = {
     types: { SNV: 0, INDEL: 0 },
     classes: { pathogenic: 0, likely_pathogenic: 0, vus: 0, likely_benign: 0, benign: 0 },
@@ -778,6 +778,10 @@ function openDetails(id) {
       <div class="detail-group"><div class="detail-label">VCF ID</div><div class="detail-value">${V.idCol[id]}</div></div>
     </div>
     <div class="flex-row">
+      <div class="detail-group"><div class="detail-label">Assembly</div><div class="detail-value">${V.assembly[id]}</div></div>
+      <div class="detail-group"><div class="detail-label">Parsed Locus</div><div class="detail-value">chr${V.chrom[id]}:${V.pos[id]}</div></div>
+    </div>
+    <div class="flex-row">
       <div class="detail-group"><div class="detail-label">Ref</div><div class="detail-value">${V.ref[id]}</div></div>
       <div class="detail-group"><div class="detail-label">Alt</div><div class="detail-value" style="color: var(--accent);">${V.alt[id]}</div></div>
     </div>
@@ -821,7 +825,7 @@ function clearAll() {
 
 function pushVariant(v) {
   const id = N++;
-  V.chrom.push(v.chrom); V.pos.push(v.pos); V.gene.push(v.gene); V.type.push(v.type);
+  V.chrom.push(v.chrom); V.assembly.push(v.assembly || "Unknown"); V.pos.push(v.pos); V.gene.push(v.gene); V.type.push(v.type);
   V.af.push(v.af); V.classification.push(v.class); V.idCol.push(v.idCol || ".");
   V.ref.push(v.ref || "-"); V.alt.push(v.alt || "-"); V.qual.push(v.qual || ".");
   V.filter.push(v.filter || "."); V.rawInfo.push(v.rawInfo || ".");
@@ -860,32 +864,124 @@ function parseVCFData(textData) {
     const cols = line.split('\t');
     if (cols.length < 8) continue;
     
-    const rawChrom = cols[0]; const pos = parseInt(cols[1], 10);
-    const idCol = cols[2]; const ref = cols[3]; const alt = cols[4];
-    const qual = cols[5]; const filter = cols[6]; const info = cols[7];
+    const rawChrom = cols[0]; 
+    const pos = parseInt(cols[1], 10);
+    const idCol = cols[2]; 
+    const ref = cols[3]; 
+    const alt = cols[4];
+    const qual = cols[5]; 
+    const filter = cols[6]; 
+    const info = cols[7];
     const formatStr = cols.length > 8 ? cols[8] : "";
     const sampleDataArr = cols.length > 9 ? cols.slice(9) : [];
 
-    const chrom = rawChrom.replace(/^chr/i, '');
-    const type = (ref.length === alt.length && ref.length === 1) ? "SNV" : "INDEL";
+    // Chromosome Extraction (Handles "grch38#chr18" -> "18")
+    const chromMatch = rawChrom.match(/chr([A-Za-z0-9_]+)/i); 
+    const chrom = chromMatch ? chromMatch[1] : rawChrom;
+    const assemblyMatch = rawChrom.match(/^([^#]+)#/);
+    let assembly = "Unknown";
+
+    if (assemblyMatch) {
+      const rawAssembly = assemblyMatch[1].toLowerCase();
+      
+      // Map of known genome builds
+      const assemblyMap = {
+        // Standard Human References
+        "grch38": "GRCh38",
+        "grch38.p13": "GRCh38.p13",
+        "grch38.p14": "GRCh38.p14",
+        "grch37": "GRCh37",
+        "hg38": "hg38",
+        "hg19": "hg19",
+        
+        // Telomere-to-Telomere (T2T) Consortium
+        "chm13": "T2T-CHM13",
+        "chm13v2.0": "T2T-CHM13v2.0",
+        "hs1": "T2T-CHM13", // Often used as an alias for CHM13 in recent pangenome tools
+        
+        // Human Pangenome Reference Consortium (HPRC) specific prefixes
+        "hprc-v1.0-mc-grch38": "HPRC-v1.0 (GRCh38)",
+        "hprc-v1.1-mc-chm13": "HPRC-v1.1 (CHM13)",
+        "hprc-v1.1-mc-grch38": "HPRC-v1.1 (GRCh38)",
+        
+        // Chinese Pangenome Consortium
+        "cpc-core": "CPC-Core",
+        "cpc": "CPC-Core",
+
+        // Common Model Organisms (often used in testing Minigraph-Cactus graphs)
+        "canfam4": "canFam4", // Dog
+        "mm39": "mm39",       // Mouse
+        "bostau9": "bosTau9", // Cow
+        "dm6": "dm6",         // Fruit fly
+        "galgal6": "galGal6"  // Chicken
+      };
+
+
+      assembly = assemblyMap[rawAssembly] || assemblyMatch[1];
+    }
+
+    // Handle Multi-Allelic Types
+    const isMulti = alt.includes(',');
+    let type = "INDEL";
+    if (isMulti) {
+      type = "MULTI"; // New type for comma-separated alleles
+    } else if (ref.length === alt.length && ref.length === 1) {
+      type = "SNV";
+    }
     
+    // Gene/ID assignment (Ignore graph paths starting with '>')
     let gene = "Unknown";
     const geneMatch = info.match(/GENEINFO=([^:;]+)/i) || info.match(/GENE=([^;]+)/i);
-    if (geneMatch) gene = geneMatch[1]; else if (idCol && idCol !== ".") gene = idCol; 
+    if (geneMatch) {
+      gene = geneMatch[1];
+    } else if (idCol && idCol !== "." && !idCol.startsWith(">")) {
+      gene = idCol; 
+    }
     
-    let af = 0.0; const afMatch = info.match(/AF=([\d.eE+-]+)/i);
-    if (afMatch) af = parseFloat(afMatch[1]);
-    
-    let cls = "vus"; const infoLower = info.toLowerCase();
+    // Extract raw string arrays for fields that map to multiple alleles
+    const afMatch = info.match(/AF=([\d.eE+-,]+)/i);
+    const afArray = afMatch ? afMatch[1].split(',') : [];
+
+    // Classification extraction (Simplified for the whole site, though advanced 
+    // annotators split this per allele. We will apply the site-level class to all for now).
+    let cls = "vus"; 
+    const infoLower = info.toLowerCase();
     if (infoLower.includes("pathogenic") && !infoLower.includes("likely")) cls = "pathogenic";
     else if (infoLower.includes("likely_pathogenic") || infoLower.includes("likely pathogenic")) cls = "likely_pathogenic";
     else if (infoLower.includes("benign") && !infoLower.includes("likely")) cls = "benign";
     else if (infoLower.includes("likely_benign") || infoLower.includes("likely benign")) cls = "likely_benign";
 
-    pushVariant({
-      chrom: chrom, pos: pos, gene: gene, type: type, af: af || 0.0, class: cls,
-      idCol: idCol, ref: ref, alt: alt, qual: qual, filter: filter, rawInfo: info,
-      format: formatStr, samples: sampleDataArr
+    // --- DECOMPOSITION LOGIC ---
+    const alts = alt.split(',');
+
+    alts.forEach((singleAlt, altIndex) => {
+      // Determine type for THIS specific allele
+      const type = (ref.length === singleAlt.length && ref.length === 1) ? "SNV" : "INDEL";
+      
+      // Grab the corresponding AF (Fallback to 0 if the array is malformed)
+      const specificAf = afArray[altIndex] ? parseFloat(afArray[altIndex]) : 0.0;
+
+      // Create a unique ID modifier if it's multi-allelic
+      const displayId = alts.length > 1 && idCol !== "." ? `${idCol}_alt${altIndex+1}` : idCol;
+
+      // Push this specific allele as its own variant
+      pushVariant({
+        chrom: chrom, 
+        rawChrom: rawChrom, 
+        pos: pos, 
+        gene: gene, 
+        type: type, 
+        af: specificAf || 0.0, 
+        class: cls,
+        idCol: displayId, 
+        ref: ref, 
+        alt: singleAlt,  // Only push this single alt
+        qual: qual, 
+        filter: filter, 
+        rawInfo: info,
+        format: formatStr, 
+        samples: sampleDataArr
+      });
     });
   }
   populateDropdowns();
