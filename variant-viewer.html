@@ -194,6 +194,25 @@
     table.samples { width: 100%; border-collapse: collapse; font-size: 12px; text-align: left; }
     table.samples th, table.samples td { padding: 6px 8px; border-bottom: 1px solid var(--border); }
     table.samples th { background: var(--bg-panel); position: sticky; top: 0; color: var(--text-muted); font-weight: 600; text-transform: uppercase; font-size: 10px; }
+    .clinvar-btn {
+      display: inline-block;
+      padding: 8px 16px;
+      background: var(--bg-highlight);
+      border: 1px solid var(--accent);
+      color: var(--accent);
+      text-decoration: none;
+      border-radius: 6px;
+      font-weight: 500;
+      transition: all 0.2s;
+      text-align: center;
+      width: 100%;
+    }
+
+    .clinvar-btn:hover {
+      background: var(--accent);
+      color: var(--bg-base);
+    }
+  
   </style>
 </head>
 <body>
@@ -794,6 +813,11 @@ function openDetails(id) {
       <div class="detail-label">Raw INFO Field</div>
       <div class="detail-value" style="white-space: pre-wrap; font-size: 11px;">${formattedInfo}</div>
     </div>
+        <div class="flex-row" style="margin-top: 16px;">
+      <a href="${getClinVarLink(id)}" target="_blank" class="clinvar-btn">
+        View in ClinVar ↗
+      </a>
+    </div>
   `;
   detailsPanel.classList.add("open");
 }
@@ -882,6 +906,7 @@ function parseVCFData(textData) {
     let assembly = "Unknown";
 
     if (assemblyMatch) {
+      console.log(`[Parser Debug] Line ${i} | Assembly Match Found: "${assemblyMatch[1]}"`);
       const rawAssembly = assemblyMatch[1].toLowerCase();
       
       // Map of known genome builds
@@ -967,7 +992,7 @@ function parseVCFData(textData) {
       // Push this specific allele as its own variant
       pushVariant({
         chrom: chrom, 
-        rawChrom: rawChrom, 
+        assembly: assembly, 
         pos: pos, 
         gene: gene, 
         type: type, 
@@ -1011,6 +1036,29 @@ function loadDemo() {
   populateDropdowns();
   recomputeVisible();
   checkEmptyState();
+}
+
+// =====================
+// CLINVAR INTEGRATION
+// =====================
+
+function getClinVarLink(id) {
+  // VCF ID if looks like rsID
+  const idCol = V.idCol[id];
+  if (idCol && idCol.startsWith('rs')) {
+    return `https://www.ncbi.nlm.nih.gov/clinvar/?term=${idCol}`;
+  }
+
+  // Fallback: genomic coordinate search
+  // Format: Assembly + Gene/Locus + Position
+  const chrom = V.chrom[id];
+  const pos = V.pos[id];
+  const ref = V.ref[id];
+  const alt = V.alt[id];
+  
+  // ClinVar search string: "GRCh38[Assembly] AND 18[Chromosome] AND 33794058[Position]"
+  const assembly = V.assembly[id] || "GRCh38"; 
+  return `https://www.ncbi.nlm.nih.gov/clinvar/?term=${assembly}[Assembly]+AND+${chrom}[Chromosome]+AND+${pos}[Position]`;
 }
 
 checkEmptyState();
